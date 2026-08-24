@@ -17,6 +17,11 @@ on:
         required: false
         default: "0.001"
         type: string
+      levels:
+        description: Comma-separated boundary levels
+        required: false
+        default: ADM3
+        type: string
 
 permissions:
   contents: write
@@ -37,6 +42,7 @@ jobs:
           --version "${{ inputs.version }}"
           --countries "${{ inputs.countries }}"
           --tolerance "${{ inputs.tolerance }}"
+          --levels "${{ inputs.levels }}"
       - name: Create immutable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
