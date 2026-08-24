@@ -23,7 +23,7 @@ from urllib import request
 
 API = "https://www.geoboundaries.org/api/current/gbOpen/ALL/{level}/"
 HEADERS = {"User-Agent": "open-boundary-index-generator/1.0", "Accept": "application/json"}
-LEVELS = ("ADM3", "ADM4", "ADM5")
+LEVELS = ("ADM2", "ADM3", "ADM4", "ADM5")
 MAX_ASSET_BYTES = 100 * 1024 * 1024
 
 
