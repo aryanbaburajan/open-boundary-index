@@ -5,7 +5,7 @@ Release-ready, web-simplified administrative boundaries derived from
 
 The repository contains the reproducible generator and small source records.
 Generated geometry belongs in versioned GitHub Release assets rather than Git,
-so app deployments never need to bundle global ADM3--ADM5 boundaries.
+so app deployments never need to bundle global ADM2 boundaries.
 
 ## Generate a release
 

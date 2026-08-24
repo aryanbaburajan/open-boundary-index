@@ -1,4 +1,4 @@
-"""Generate release-ready ADM3–ADM5 boundary assets from geoBoundaries.
+"""Generate release-ready ADM2 boundary assets from geoBoundaries.
 
 This deliberately writes its output outside the app bundle. Point it at the
 working tree of the public data repository (for example
@@ -12,7 +12,6 @@ import argparse
 import gzip
 import hashlib
 import json
-import math
 import shutil
 import sys
 from collections.abc import Iterable
@@ -23,7 +22,7 @@ from urllib import request
 
 API = "https://www.geoboundaries.org/api/current/gbOpen/ALL/{level}/"
 HEADERS = {"User-Agent": "open-boundary-index-generator/1.0", "Accept": "application/json"}
-LEVELS = ("ADM2", "ADM3", "ADM4", "ADM5")
+LEVELS = ("ADM2",)
 MAX_ASSET_BYTES = 100 * 1024 * 1024
 
 
@@ -35,14 +34,6 @@ def fetch_json(url: str) -> Any:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-
-
-def write_gzip_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(path, "wt", encoding="utf-8", compresslevel=9) as output:
-        json.dump(value, output, ensure_ascii=False, separators=(",", ":"))
-    if path.stat().st_size > MAX_ASSET_BYTES:
-        raise RuntimeError(f"Release asset exceeds GitHub's 100 MiB limit: {path} ({path.stat().st_size:,} bytes)")
 
 
 def assert_asset_size(path: Path) -> None:
@@ -155,12 +146,11 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def generate_level(output: Path, version: str, level: str, countries: set[str], tolerance: float, overrides: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def generate_level(output: Path, version: str, level: str, countries: set[str], tolerance: float) -> list[dict[str, Any]]:
     index = fetch_json(API.format(level=level))
     if not isinstance(index, list):
         raise RuntimeError(f"Invalid geoBoundaries index for {level}")
     sources: list[dict[str, Any]] = []
-    generated_overrides: list[dict[str, Any]] = []
     for item in index:
         if not isinstance(item, dict):
             continue
@@ -201,23 +191,6 @@ def generate_level(output: Path, version: str, level: str, countries: set[str], 
                     manifest_output.write(",")
                 json.dump({"type": "Feature", "properties": {"id": place_id, "name": name}, "geometry": output_geometry(shape)}, chunk_output, ensure_ascii=False, separators=(",", ":"))
                 json.dump({"id": place_id, "name": name, "aliases": aliases(properties, name), "country": iso3, "level": level, "centroid": centroid, "bbox": bbox, "chunk": f"chunks/{level}/{chunk_name}"}, manifest_output, ensure_ascii=False, separators=(",", ":"))
-                for override in overrides:
-                    if override.get("country") != iso3 or override.get("level") != level or str(override.get("sourceId")) != source_id:
-                        continue
-                    override_id = str(override["id"])
-                    override_asset = f"{override_id}.geojson.gz"
-                    write_gzip_json(output / "places" / override_asset, {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"id": place_id, "name": name}, "geometry": output_geometry(shape)}]})
-                    generated_overrides.append({
-                        "id": f"override:{override_id}",
-                        "name": override["name"],
-                        "aliases": override.get("aliases", [override["name"]]),
-                        "country": iso3,
-                        "level": level,
-                        "boundaryName": name,
-                        "centroid": centroid,
-                        "bbox": bbox,
-                        "chunk": f"places/{override_asset}",
-                    })
                 feature_count += 1
             chunk_output.write("]}")
             manifest_output.write("]}")
@@ -228,7 +201,7 @@ def generate_level(output: Path, version: str, level: str, countries: set[str], 
         assert_asset_size(chunk_path)
         assert_asset_size(manifest_path)
         sources.append({"country": iso3, "level": level, "apiRecord": item, "geometryUrl": geometry_url, "features": feature_count})
-    return sources, generated_overrides
+    return sources
 
 
 def main() -> int:
@@ -236,7 +209,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True, help="Data repository directory")
     parser.add_argument("--version", required=True, help="Release version, e.g. 2026-08-24")
     parser.add_argument("--countries", default="", help="Comma-separated ISO3 subset; omit for global")
-    parser.add_argument("--levels", default=",".join(LEVELS), help="Comma-separated levels, e.g. ADM3,ADM4")
+    parser.add_argument("--levels", default="ADM2", help="Administrative levels (ADM2 only)")
     parser.add_argument("--tolerance", type=float, default=0.001, help="Geometry simplification in degrees")
     arguments = parser.parse_args()
     countries = {country.strip().upper() for country in arguments.countries.split(",") if country.strip()}
@@ -247,16 +220,9 @@ def main() -> int:
     if output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True)
-    overrides_path = Path(__file__).with_name("overrides.json")
-    overrides = json.loads(overrides_path.read_text(encoding="utf-8")) if overrides_path.exists() else []
-    if not isinstance(overrides, list):
-        raise RuntimeError(f"Invalid overrides file: {overrides_path}")
-    generated = [generate_level(output, arguments.version, level, countries, arguments.tolerance, overrides) for level in levels]
-    sources = [source for level_sources, _ in generated for source in level_sources]
-    generated_overrides = [override for _, level_overrides in generated for override in level_overrides]
+    sources = [source for level in levels for source in generate_level(output, arguments.version, level, countries, arguments.tolerance)]
     write_json(output / "index.json", {"version": arguments.version, "levels": list(levels), "countries": sorted({source["country"] for source in sources})})
     write_json(output / "sources.json", {"source": "geoBoundaries gbOpen", "generatedAt": arguments.version, "records": sources})
-    write_json(output / "overrides.json", {"version": arguments.version, "places": generated_overrides})
     (output / "ATTRIBUTION.txt").write_text("Boundary data: geoBoundaries (www.geoboundaries.org), gbOpen. See sources.json for source records.\n", encoding="utf-8")
     files = sorted(path for path in output.rglob("*") if path.is_file())
     (output / "SHA256SUMS").write_text("".join(f"{sha256(path)}  {path.relative_to(output)}\n" for path in files), encoding="utf-8")
