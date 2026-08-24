@@ -174,8 +174,10 @@ def generate_level(output: Path, version: str, level: str, countries: set[str], 
         raw_features = payload.get("features") if isinstance(payload, dict) else None
         if not isinstance(raw_features, list):
             continue
-        chunk_path = output / "chunks" / level / f"{iso3}.geojson.gz"
-        manifest_path = output / "manifests" / level / f"{iso3}.json.gz"
+        chunk_name = f"{iso3}-{level}.geojson.gz"
+        manifest_name = f"{iso3}-{level}.json.gz"
+        chunk_path = output / "chunks" / level / chunk_name
+        manifest_path = output / "manifests" / level / manifest_name
         chunk_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         feature_count = 0
@@ -197,7 +199,7 @@ def generate_level(output: Path, version: str, level: str, countries: set[str], 
                     chunk_output.write(",")
                     manifest_output.write(",")
                 json.dump({"type": "Feature", "properties": {"id": place_id, "name": name}, "geometry": output_geometry(shape)}, chunk_output, ensure_ascii=False, separators=(",", ":"))
-                json.dump({"id": place_id, "name": name, "aliases": aliases(properties, name), "country": iso3, "level": level, "centroid": centroid, "bbox": bbox, "chunk": f"chunks/{level}/{iso3}.geojson.gz"}, manifest_output, ensure_ascii=False, separators=(",", ":"))
+                json.dump({"id": place_id, "name": name, "aliases": aliases(properties, name), "country": iso3, "level": level, "centroid": centroid, "bbox": bbox, "chunk": f"chunks/{level}/{chunk_name}"}, manifest_output, ensure_ascii=False, separators=(",", ":"))
                 feature_count += 1
             chunk_output.write("]}")
             manifest_output.write("]}")
