@@ -1,0 +1,48 @@
+name: Generate boundary release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Immutable release version (for example 2026-08-24)
+        required: true
+        type: string
+      countries:
+        description: Comma-separated ISO3 countries; leave empty for global
+        required: false
+        default: IND
+        type: string
+      tolerance:
+        description: Simplification tolerance in degrees
+        required: false
+        default: "0.001"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  generate-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Generate release assets
+        run: >-
+          python generate.py
+          --output .
+          --version "${{ inputs.version }}"
+          --countries "${{ inputs.countries }}"
+          --tolerance "${{ inputs.tolerance }}"
+      - name: Create immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.version }}" \
+            --title "Boundary index ${{ inputs.version }}" \
+            --generate-notes
+          find "dist/${{ inputs.version }}" -type f -print0 | \
+            xargs -0 gh release upload "${{ inputs.version }}" --clobber
