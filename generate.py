@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Any
 from urllib import request
 
+import shapely
+from shapely.geometry import mapping, shape as geometry_shape
+
 
 API = "https://www.geoboundaries.org/api/current/gbOpen/ALL/{level}/"
 HEADERS = {"User-Agent": "open-boundary-index-generator/1.0", "Accept": "application/json"}
@@ -69,39 +72,7 @@ def normalize_ring(ring: Any) -> list[list[float]]:
     return points if len(points) >= 4 else []
 
 
-def simplify_ring(points: list[list[float]], tolerance: float) -> list[list[float]]:
-    """A small iterative Douglas–Peucker implementation for closed rings."""
-    if len(points) <= 5 or tolerance <= 0:
-        return points
-    closed = points[:-1]
-    if len(closed) < 3:
-        return points
-    keep = [False] * len(closed)
-    keep[0] = keep[-1] = True
-    tolerance_squared = tolerance * tolerance
-    stack = [(0, len(closed) - 1)]
-    while stack:
-        start, end = stack.pop()
-        ax, ay = closed[start]
-        bx, by = closed[end]
-        dx, dy = bx - ax, by - ay
-        denominator = dx * dx + dy * dy
-        furthest, furthest_distance = -1, 0.0
-        for index in range(start + 1, end):
-            px, py = closed[index]
-            ratio = 0.0 if denominator == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / denominator))
-            qx, qy = ax + ratio * dx, ay + ratio * dy
-            distance = (px - qx) ** 2 + (py - qy) ** 2
-            if distance > furthest_distance:
-                furthest, furthest_distance = index, distance
-        if furthest >= 0 and furthest_distance > tolerance_squared:
-            keep[furthest] = True
-            stack.extend(((start, furthest), (furthest, end)))
-    simplified = [point for index, point in enumerate(closed) if keep[index]]
-    return simplified + [simplified[0][:]] if len(simplified) >= 3 else points
-
-
-def polygons(geometry: Any, tolerance: float) -> list[list[list[list[float]]]]:
+def polygons(geometry: Any) -> list[list[list[list[float]]]]:
     if not isinstance(geometry, dict):
         return []
     geometry_type, coordinates = geometry.get("type"), geometry.get("coordinates")
@@ -112,7 +83,7 @@ def polygons(geometry: Any, tolerance: float) -> list[list[list[list[float]]]]:
     for raw_polygon in raw_polygons:
         if not isinstance(raw_polygon, list):
             continue
-        rings = [simplify_ring(ring, tolerance) for ring in (normalize_ring(raw_ring) for raw_ring in raw_polygon)]
+        rings = [normalize_ring(raw_ring) for raw_ring in raw_polygon]
         rings = [ring for ring in rings if ring]
         if rings:
             output.append(rings)
@@ -165,6 +136,24 @@ def generate_level(output: Path, version: str, level: str, countries: set[str], 
         raw_features = payload.get("features") if isinstance(payload, dict) else None
         if not isinstance(raw_features, list):
             continue
+        prepared = []
+        for ordinal, raw_feature in enumerate(raw_features):
+            if not isinstance(raw_feature, dict):
+                continue
+            properties = raw_feature.get("properties")
+            name = canonical_name(properties) if isinstance(properties, dict) else None
+            polygon_coordinates = polygons(raw_feature.get("geometry"))
+            if not name or not polygon_coordinates:
+                continue
+            prepared.append((ordinal, properties, name, geometry_shape(output_geometry(polygon_coordinates))))
+        if not prepared:
+            continue
+        geometries = [item[3] for item in prepared]
+        if not all(geometry.is_valid for geometry in geometries) or not shapely.coverage_is_valid(geometries):
+            raise RuntimeError(f"Invalid input polygon coverage for {iso3} {level}")
+        simplified = shapely.coverage_simplify(geometries, tolerance) if tolerance > 0 else geometries
+        if not all(geometry.is_valid and not geometry.is_empty for geometry in simplified) or not shapely.coverage_is_valid(simplified):
+            raise RuntimeError(f"Invalid simplified polygon coverage for {iso3} {level}")
         chunk_name = f"{iso3}-{level}.geojson.gz"
         manifest_name = f"{iso3}-{level}.json.gz"
         chunk_path = output / "chunks" / level / chunk_name
@@ -175,22 +164,18 @@ def generate_level(output: Path, version: str, level: str, countries: set[str], 
         with gzip.open(chunk_path, "wt", encoding="utf-8", compresslevel=9) as chunk_output, gzip.open(manifest_path, "wt", encoding="utf-8", compresslevel=9) as manifest_output:
             chunk_output.write('{"type":"FeatureCollection","features":[')
             manifest_output.write('{"version":' + json.dumps(version) + ',"places":[')
-            for ordinal, raw_feature in enumerate(raw_features):
-                if not isinstance(raw_feature, dict):
-                    continue
-                properties = raw_feature.get("properties")
-                name = canonical_name(properties) if isinstance(properties, dict) else None
-                shape = polygons(raw_feature.get("geometry"), tolerance)
-                if not name or not shape:
-                    continue
+            for (ordinal, properties, name, _), geometry in zip(prepared, simplified):
+                normalized_geometry = mapping(geometry)
+                shape_coordinates = normalized_geometry["coordinates"]
+                shape = [shape_coordinates] if normalized_geometry["type"] == "Polygon" else shape_coordinates
                 source_id = str(properties.get("shapeID") or properties.get("id") or ordinal)
                 place_id = f"gb:{version}:{level}:{iso3}:{source_id}"
                 bbox, centroid = bbox_and_centroid(shape)
                 if feature_count:
                     chunk_output.write(",")
                     manifest_output.write(",")
-                json.dump({"type": "Feature", "properties": {"id": place_id, "name": name}, "geometry": output_geometry(shape)}, chunk_output, ensure_ascii=False, separators=(",", ":"))
-                json.dump({"id": place_id, "name": name, "aliases": aliases(properties, name), "country": iso3, "level": level, "centroid": centroid, "bbox": bbox, "chunk": f"chunks/{level}/{chunk_name}"}, manifest_output, ensure_ascii=False, separators=(",", ":"))
+                json.dump({"type": "Feature", "properties": {"id": place_id, "name": name}, "geometry": normalized_geometry}, chunk_output, ensure_ascii=False, separators=(",", ":"))
+                json.dump({"id": place_id, "name": name, "aliases": aliases(properties, name), "country": iso3, "level": level, "centroid": centroid, "bbox": bbox, "chunk": chunk_name}, manifest_output, ensure_ascii=False, separators=(",", ":"))
                 feature_count += 1
             chunk_output.write("]}")
             manifest_output.write("]}")
@@ -225,7 +210,7 @@ def main() -> int:
     write_json(output / "sources.json", {"source": "geoBoundaries gbOpen", "generatedAt": arguments.version, "records": sources})
     (output / "ATTRIBUTION.txt").write_text("Boundary data: geoBoundaries (www.geoboundaries.org), gbOpen. See sources.json for source records.\n", encoding="utf-8")
     files = sorted(path for path in output.rglob("*") if path.is_file())
-    (output / "SHA256SUMS").write_text("".join(f"{sha256(path)}  {path.relative_to(output)}\n" for path in files), encoding="utf-8")
+    (output / "SHA256SUMS").write_text("".join(f"{sha256(path)}  {path.name}\n" for path in files), encoding="utf-8")
     print(f"Wrote {output}")
     return 0
 

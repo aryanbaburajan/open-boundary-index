@@ -20,7 +20,7 @@ on:
       levels:
         description: Comma-separated boundary levels
         required: false
-        default: ADM3
+        default: ADM2
         type: string
 
 permissions:
@@ -35,6 +35,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install generator dependencies
+        run: python -m pip install -r requirements.txt
       - name: Generate release assets
         run: >-
           python generate.py
@@ -46,11 +48,12 @@ jobs:
       - name: Create immutable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
         run: |
-          if ! gh release view "${{ inputs.version }}" >/dev/null 2>&1; then
-            gh release create "${{ inputs.version }}" \
-              --title "Boundary index ${{ inputs.version }}" \
-              --generate-notes
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release already exists: $VERSION" >&2
+            exit 1
           fi
-          find "dist/${{ inputs.version }}" -type f -print0 | \
-            xargs -0 gh release upload "${{ inputs.version }}" --clobber
+          gh release create "$VERSION" --title "Boundary index $VERSION" --generate-notes
+          find "dist/$VERSION" -type f -print0 | \
+            xargs -0 gh release upload "$VERSION"

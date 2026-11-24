@@ -10,8 +10,11 @@ so app deployments never need to bundle global ADM2 boundaries.
 ## Generate a release
 
 ```bash
+python3 -m pip install -r requirements.txt
 python3 generate.py --output . --version 2026-08-24 --countries IND
 ```
+
+The generator requires Shapely 2.1 or newer with GEOS 3.12 or newer. It validates polygon coverage before and after simplifying shared boundaries. Invalid input stops generation for review.
 
 Omit `--countries` for a global release. The output is written beneath
 `dist/<version>/` and contains:
@@ -22,7 +25,7 @@ Omit `--countries` for a global release. The output is written beneath
 - `sources.json`, `SHA256SUMS`, and `ATTRIBUTION.txt`.
 
 The generator rejects compressed assets larger than 100 MiB, the GitHub
-regular-Git file limit. Upload the contents of `dist/<version>/` as release
+regular-Git file limit. Upload the files beneath `dist/<version>/` as flat release
 assets and keep the version unchanged forever so shared maps remain
 reproducible.
 
